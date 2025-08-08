@@ -1,9 +1,9 @@
 import azure.functions as func
 import logging
 from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
 import os
 import json
+from azure.identity import DefaultAzureCredential
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -54,36 +54,26 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=404
             )
 
-        # Fix for the 'create_thread' method issue
+        # Create or reuse thread
         if not threadid:
-            # Create a new thread using the correct API
-            try:
-                # Try the newer API if available
-                thread_response = project_client.agents.create_thread()
-                thread_id = thread_response.id
-            except AttributeError:
-                # Fallback to direct REST API call if needed
-                logging.info("Using alternative method to create thread")
-                thread_response = project_client.agents.threads.create()
-                thread_id = thread_response.id
-        else:
-            thread_id = threadid
-            
-        # Create a message in the thread
-        message = project_client.agents.messages.create(
-            thread_id=thread_id,
+            thread = project_client.agents.threads.create()
+            threadid = thread.id
+
+        # Post user message
+        project_client.agents.messages.create(
+            thread_id=threadid,
             role="user",
             content=message
         )
 
         # Process the message with the agent
         project_client.agents.runs.create_and_process(
-            thread_id=thread_id,
+            thread_id=threadid,
             agent_id=agent.id
         )
 
         # Get the messages from the thread
-        messages = project_client.agents.messages.list(thread_id=thread_id)
+        messages = project_client.agents.messages.list(thread_id=threadid)
         assistant_messages = [m for m in messages if m["role"] == "assistant"]
         if assistant_messages:
             assistant_message = assistant_messages[-1]
@@ -93,20 +83,18 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         else:
             assistant_text = "No assistant message found."
 
-        # Return the response with the thread ID for continuity
-        #response_data = {
-        #    "message": assistant_text,
-        #    "threadId": thread_id
-        #}
-        
+        response = {
+            "response": assistant_text,
+            "threadId": threadid
+        }
+
         return func.HttpResponse(
-            json.dumps(assistant_text),
+            json.dumps(response),
             status_code=200,
             mimetype="application/json"
         )
     except Exception as e:
         logging.error(f"An error occurred: {str(e)}")
-        # Include more detailed error information for debugging
         import traceback
         logging.error(traceback.format_exc())
         return func.HttpResponse(
